@@ -60,11 +60,11 @@ export default function AdminChannelsPage() {
           .order("default_order", { ascending: true }),
       ]);
 
-      if (catError) console.error("Categories error:", catError);
-      if (chError) console.error("Channels error:", chError);
+      if (catError?.message) console.error("Categories error:", catError);
+      if (chError?.message) console.error("Channels error:", chError);
 
-      setCategories(catData ?? []);
-      setChannels(chData ?? []);
+      if (catData) setCategories(catData);
+      if (chData) setChannels(chData);
       setLoading(false);
     };
 
