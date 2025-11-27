@@ -23,6 +23,7 @@ export default function HomePage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDate, setFilterDate] = useState("");
   const filterDateRef = useRef<HTMLInputElement>(null);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -90,6 +91,23 @@ export default function HomePage() {
       const bDate = b.inserted_at ? new Date(b.inserted_at).getTime() : 0;
       return bDate - aDate;
     });
+
+  const handleDeleteEvent = async (id: string) => {
+    if (!window.confirm("Event verwijderen? Dit kan niet ongedaan gemaakt worden.")) return;
+    setDeletingEventId(id);
+    setError(null);
+
+    const { error: delError } = await supabase.from("events").delete().eq("id", id);
+    if (delError) {
+      console.error("Delete event error:", delError);
+      setError("Fout bij verwijderen van event.");
+      setDeletingEventId(null);
+      return;
+    }
+
+    setEvents((prev) => prev.filter((ev) => ev.id !== id));
+    setDeletingEventId(null);
+  };
 
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
@@ -277,9 +295,8 @@ export default function HomePage() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {filteredEvents.map((ev) => (
-              <a
+              <div
                 key={ev.id}
-                href={`/festival/builder?eventId=${ev.id}`}
                 style={{
                   display: "flex",
                   gap: 12,
@@ -290,7 +307,9 @@ export default function HomePage() {
                   borderRadius: 6,
                   color: "inherit",
                   textDecoration: "none",
+                  cursor: "pointer",
                 }}
+                onClick={() => router.push(`/festival/builder?eventId=${ev.id}`)}
               >
                 <div>
                   <div style={{ fontWeight: 600 }}>{ev.name}</div>
@@ -298,8 +317,28 @@ export default function HomePage() {
                     Datum: {ev.event_date ?? "n/a"}
                   </div>
                 </div>
-                <div style={{ color: "#bbb", fontSize: 13 }}>Open builder →</div>
-              </a>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ color: "#bbb", fontSize: 13 }}>Open builder →</div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteEvent(ev.id);
+                    }}
+                    disabled={deletingEventId === ev.id}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 4,
+                      border: "1px solid #d9534f",
+                      background: "#2a0f0f",
+                      color: "#f5c6cb",
+                      cursor: deletingEventId === ev.id ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {deletingEventId === ev.id ? "Verwijderen…" : "Event verwijderen"}
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         )}

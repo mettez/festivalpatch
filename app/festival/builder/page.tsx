@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -67,6 +67,7 @@ export default function FestivalBuilderPage() {
   const [newChannelNames, setNewChannelNames] = useState<Record<string, string>>({});
   const [newChannelOrders, setNewChannelOrders] = useState<Record<string, string>>({});
   const [savingChannelCatId, setSavingChannelCatId] = useState<string | null>(null);
+  const knownCategoryIdsRef = useRef<Set<string>>(new Set());
 
   const selectedEvent = useMemo(
     () => events.find((ev) => ev.id === selectedEventId) ?? null,
@@ -118,6 +119,15 @@ export default function FestivalBuilderPage() {
     loadBase();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // categorieën standaard dichtklappen (ook bij refresh/navigatie)
+  useEffect(() => {
+    if (categories.length === 0) return;
+    const next = new Set<string>();
+    categories.forEach((cat) => next.add(cat.id));
+    setCollapsedCategories(next);
+    knownCategoryIdsRef.current = next;
+  }, [categories]);
 
   const loadEventData = async (eventId: string) => {
     setLoading(true);
