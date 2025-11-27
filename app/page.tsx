@@ -1,65 +1,309 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+
+type Event = {
+  id: string;
+  name: string;
+  event_date: string | null;
+  inserted_at?: string | null;
+};
+
+export default function HomePage() {
+  const router = useRouter();
+  const [events, setEvents] = useState<Event[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState("");
+  const [date, setDate] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterDate, setFilterDate] = useState("");
+  const filterDateRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data, error: evError } = await supabase
+        .from("events")
+        .select("id, name, event_date, inserted_at")
+        .order("inserted_at", { ascending: false })
+        .order("event_date", { ascending: false });
+
+      if (evError) {
+        console.error("Events error:", evError);
+        setError("Fout bij laden van events.");
+      } else {
+        setEvents(data ?? []);
+      }
+      setLoading(false);
+    };
+
+    load();
+  }, []);
+
+  const handleCreate = async () => {
+    if (name.trim() === "") {
+      setError("Titel is verplicht.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    const { data, error: insertError } = await supabase
+      .from("events")
+      .insert({
+        name: name.trim(),
+        event_date: date || null,
+      })
+      .select()
+      .single();
+
+    if (insertError || !data) {
+      console.error("Insert error:", insertError);
+      setError("Fout bij aanmaken event.");
+      setSaving(false);
+      return;
+    }
+
+    setEvents((prev) => [...prev, data]);
+    setSaving(false);
+    setName("");
+    setDate("");
+    router.push(`/festival/builder?eventId=${data.id}`);
+  };
+
+  const filteredEvents = events
+    .filter((ev) => {
+      const matchName =
+        searchTerm.trim() === "" ||
+        ev.name.toLowerCase().includes(searchTerm.trim().toLowerCase());
+      const matchDate = filterDate === "" || ev.event_date === filterDate;
+      return matchName && matchDate;
+    })
+    .sort((a, b) => {
+      const aDate = a.inserted_at ? new Date(a.inserted_at).getTime() : 0;
+      const bDate = b.inserted_at ? new Date(b.inserted_at).getTime() : 0;
+      return bDate - aDate;
+    });
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
+      <h1 style={{ marginBottom: 8 }}>Festivalpatch setup</h1>
+      <p style={{ marginBottom: 8 }}>
+        1) Maak een event aan. 2) Gebruik de builder om per band de kanalen te kiezen (baselines
+        blijven aangevinkt). De builder vervangt de losse patch- en matrixpagina.
+      </p>
+      <p style={{ marginBottom: 24 }}>
+        Standaardkanalen beheren? Ga naar <a href="/admin/channels">/admin/channels</a>.
+      </p>
+      <div style={{ marginBottom: 24 }}>
+        <a
+          href="/admin/channels"
+          style={{
+            padding: "8px 12px",
+            borderRadius: 4,
+            border: "1px solid #fff",
+            textDecoration: "none",
+          }}
+        >
+          → Beheer standaardkanalen
+        </a>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "8px 12px",
+            border: "1px solid #d9534f",
+            borderRadius: 4,
+            color: "#f5c6cb",
+            background: "#3b1f1f",
+          }}
+        >
+          {error}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+      )}
+
+      <section style={{ marginBottom: 32 }}>
+        <h2>Nieuw event</h2>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="text"
+            placeholder="Titel"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{
+              flex: "1 1 260px",
+              padding: "10px 12px",
+              borderRadius: 4,
+              border: "1px solid #444",
+              background: "#0f0f0f",
+              color: "#fff",
+            }}
+            disabled={saving}
+          />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 4,
+              border: "1px solid #444",
+              background: "#0f0f0f",
+              color: "#fff",
+            }}
+            disabled={saving}
+            ref={dateInputRef}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const node = dateInputRef.current;
+              if (!node) return;
+              if (typeof (node as HTMLInputElement & { showPicker?: () => void }).showPicker === "function") {
+                (node as HTMLInputElement & { showPicker?: () => void }).showPicker();
+              } else {
+                node.focus();
+              }
+            }}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 4,
+              border: "1px solid #555",
+              background: "#0f0f0f",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+            disabled={saving}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            Datum kiezen
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={saving}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 4,
+              border: "1px solid #fff",
+              background: saving ? "#444" : "#111",
+              cursor: saving ? "not-allowed" : "pointer",
+            }}
+          >
+            {saving ? "Opslaan…" : "Event aanmaken"}
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Bestaande events</h2>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          <input
+            type="text"
+            placeholder="Zoek op naam"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              flex: "1 1 220px",
+              padding: "8px 10px",
+              borderRadius: 4,
+              border: "1px solid #444",
+              background: "#0f0f0f",
+              color: "#fff",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="date"
+              value={filterDate}
+              onChange={(e) => setFilterDate(e.target.value)}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 4,
+                border: "1px solid #444",
+                background: "#0f0f0f",
+                color: "#fff",
+              }}
+              ref={filterDateRef}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <button
+              type="button"
+              onClick={() => {
+                const node = filterDateRef.current;
+                if (!node) return;
+                if (typeof (node as HTMLInputElement & { showPicker?: () => void }).showPicker === "function") {
+                  (node as HTMLInputElement & { showPicker?: () => void }).showPicker();
+                } else {
+                  node.focus();
+                }
+              }}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 4,
+                border: "1px solid #555",
+                background: "#0f0f0f",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Datum filter
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterDate("")}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 4,
+                border: "1px solid #555",
+                background: "#0f0f0f",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Reset datum
+            </button>
+          </div>
         </div>
-      </main>
+        {loading ? (
+          <p>Loading…</p>
+        ) : filteredEvents.length === 0 ? (
+          <p>Geen events gevonden.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {filteredEvents.map((ev) => (
+              <a
+                key={ev.id}
+                href={`/festival/builder?eventId=${ev.id}`}
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "10px 12px",
+                  border: "1px solid #333",
+                  borderRadius: 6,
+                  color: "inherit",
+                  textDecoration: "none",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600 }}>{ev.name}</div>
+                  <div style={{ color: "#aaa", fontSize: 13 }}>
+                    Datum: {ev.event_date ?? "n/a"}
+                  </div>
+                </div>
+                <div style={{ color: "#bbb", fontSize: 13 }}>Open builder →</div>
+              </a>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

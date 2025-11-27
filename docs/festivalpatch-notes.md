@@ -116,3 +116,5 @@ Stack:
   - Login / multi-user (user_id echt gebruiken).
   - Meerdere stages per event (extra tabel `stages`).
   - Desk-specifieke exports (M32/SQ6/etc).
+
+  
