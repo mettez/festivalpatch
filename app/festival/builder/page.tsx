@@ -517,6 +517,12 @@ export default function FestivalBuilderPage() {
     await applyChannelOrder(orderedIds);
   };
 
+  const handlePrint = () => {
+    if (typeof window !== "undefined") {
+      window.print();
+    }
+  };
+
   if (loading && !selectedEventId) {
     return <div style={{ padding: 16 }}>Loading…</div>;
   }
@@ -527,6 +533,27 @@ export default function FestivalBuilderPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1300, margin: "0 auto" }}>
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #print-overview,
+          #print-overview * {
+            visibility: visible;
+          }
+          #print-overview {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+          }
+          .no-print {
+            display: none !important;
+            visibility: hidden !important;
+          }
+        }
+      `}</style>
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
         <label htmlFor="event-select" style={{ fontWeight: 600 }}>
           Event:
@@ -758,8 +785,24 @@ export default function FestivalBuilderPage() {
         )}
       </section>
 
-      <section>
-        <h2>Overzicht</h2>
+      <section id="print-overview">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2>Overzicht – {selectedEvent?.name ?? "Event"}</h2>
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="no-print"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 4,
+              border: "1px solid #fff",
+              background: "#111",
+              cursor: "pointer",
+            }}
+          >
+            Exporteer PDF
+          </button>
+        </div>
         {bands.length === 0 ? (
           <p>Nog geen groepen toegevoegd.</p>
         ) : patchChannels.length === 0 ? (
@@ -781,6 +824,7 @@ export default function FestivalBuilderPage() {
                     style={{
                       textAlign: "left",
                       borderBottom: "1px solid #999",
+                      borderRight: "1px solid #999",
                       padding: "10px 8px",
                       width: 100,
                       fontWeight: 700,
@@ -792,6 +836,7 @@ export default function FestivalBuilderPage() {
                     style={{
                       textAlign: "left",
                       borderBottom: "1px solid #999",
+                      borderRight: "1px solid #999",
                       padding: "10px 8px",
                       width: 220,
                       fontWeight: 700,
@@ -805,6 +850,7 @@ export default function FestivalBuilderPage() {
                       style={{
                         textAlign: "center",
                         borderBottom: "1px solid #999",
+                        borderRight: "1px solid #999",
                         padding: "10px 8px",
                         fontWeight: 700,
                       }}
@@ -823,6 +869,7 @@ export default function FestivalBuilderPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: "1px solid #333",
+                          borderRight: "1px solid #333",
                           color: "#aaa",
                           fontWeight: 700,
                           display: "flex",
@@ -835,6 +882,7 @@ export default function FestivalBuilderPage() {
                           <button
                             type="button"
                             onClick={() => movePatchChannel(patchChannel.id, -1)}
+                            className="no-print"
                             style={{
                               padding: "2px 6px",
                               borderRadius: 4,
@@ -851,6 +899,7 @@ export default function FestivalBuilderPage() {
                           <button
                             type="button"
                             onClick={() => movePatchChannel(patchChannel.id, 1)}
+                            className="no-print"
                             style={{
                               padding: "2px 6px",
                               borderRadius: 4,
@@ -870,6 +919,7 @@ export default function FestivalBuilderPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: "1px solid #333",
+                          borderRight: "1px solid #333",
                         }}
                       >
                         {inPatch ? canonicalName(patchChannel) : "×"}
@@ -885,6 +935,7 @@ export default function FestivalBuilderPage() {
                             style={{
                               padding: "10px 8px",
                               borderBottom: "1px solid #333",
+                              borderRight: "1px solid #333",
                               textAlign: "center",
                               background: isUsed ? "#e5f2ff" : "transparent",
                               color: isUsed ? "#0d2c46" : "#666",

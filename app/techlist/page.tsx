@@ -75,6 +75,9 @@ export default function TechListPage() {
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
   const knownCategoryIdsRef = useRef<Set<string>>(new Set());
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -377,6 +380,27 @@ export default function TechListPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #techlist-print,
+          #techlist-print * {
+            visibility: visible;
+          }
+          #techlist-print {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+          }
+          .no-print {
+            display: none !important;
+            visibility: hidden !important;
+          }
+        }
+      `}</style>
       <div style={{ marginBottom: 16 }}>
         <a
           href="/"
@@ -391,10 +415,28 @@ export default function TechListPage() {
         </a>
       </div>
 
-      <h1>Kanalenlijst voor technische fiche</h1>
-      <p style={{ marginBottom: 16 }}>
-        Kies een groep en vink de kanalen aan. Festivalpatch-kolom is hier niet nodig; exporteer de lijst als CSV of kopieer.
-      </p>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <h1>Kanalenlijst voor technische fiche</h1>
+          <p style={{ marginBottom: 8 }}>
+            Kies een groep en vink de kanalen aan. Export via CSV of PDF (print).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handlePrint}
+          className="no-print"
+          style={{
+            padding: "8px 12px",
+            borderRadius: 4,
+            border: "1px solid #fff",
+            background: "#111",
+            cursor: "pointer",
+          }}
+        >
+          Exporteer PDF
+        </button>
+      </div>
 
       {error && (
         <div
@@ -482,6 +524,7 @@ export default function TechListPage() {
               background: saving ? "#444" : "#111",
               cursor: saving ? "not-allowed" : "pointer",
             }}
+            className="no-print"
           >
             {saving ? "Opslaan…" : "Opslaan"}
           </button>
@@ -497,6 +540,7 @@ export default function TechListPage() {
               color: "#f5c6cb",
               cursor: deleting || !selectedTechlistId ? "not-allowed" : "pointer",
             }}
+            className="no-print"
           >
             {deleting ? "Verwijderen…" : "Techlist verwijderen"}
           </button>
@@ -511,6 +555,7 @@ export default function TechListPage() {
               background: selectedChannelsSorted.length === 0 ? "#444" : "#111",
               cursor: selectedChannelsSorted.length === 0 ? "not-allowed" : "pointer",
             }}
+            className="no-print"
           >
             Kopieer CSV
           </button>
@@ -525,6 +570,7 @@ export default function TechListPage() {
               background: selectedChannelsSorted.length === 0 ? "#444" : "#111",
               cursor: selectedChannelsSorted.length === 0 ? "not-allowed" : "pointer",
             }}
+            className="no-print"
           >
             Download CSV
           </button>
@@ -532,7 +578,7 @@ export default function TechListPage() {
         </div>
       </section>
 
-      <section style={{ marginBottom: 32 }}>
+      <section className="no-print" style={{ marginBottom: 32 }}>
         {orderedChannels.length === 0 ? (
           <p>Geen kanalen beschikbaar.</p>
         ) : (
@@ -601,7 +647,7 @@ export default function TechListPage() {
         )}
       </section>
 
-      <section>
+      <section id="techlist-print">
         <h2>Preview kanalenlijst</h2>
         {selectedChannelsSorted.length === 0 ? (
           <p>Nog geen kanalen geselecteerd.</p>
@@ -714,10 +760,8 @@ export default function TechListPage() {
                         width: 140,
                       }}
                     >
-                      <input
-                        type="text"
-                        placeholder="Stand"
-                        value={details.stand}
+                      <select
+                        value={details.stand || "none"}
                         onChange={(e) =>
                           setChannelDetails((prev) => ({
                             ...prev,
@@ -732,7 +776,12 @@ export default function TechListPage() {
                           background: "#0f0f0f",
                           color: "#fff",
                         }}
-                      />
+                      >
+                        <option value="none">none</option>
+                        <option value="Large Boom">Large Boom</option>
+                        <option value="Small Boom">Small boom</option>
+                        <option value="Clamp">Clamp</option>
+                      </select>
                     </td>
                     <td
                       style={{
