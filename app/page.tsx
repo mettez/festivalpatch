@@ -132,6 +132,19 @@ export default function HomePage() {
           → Beheer standaardkanalen
         </a>
       </div>
+      <div style={{ marginBottom: 24 }}>
+        <a
+          href="/techlist"
+          style={{
+            padding: "8px 12px",
+            borderRadius: 4,
+            border: "1px solid #fff",
+            textDecoration: "none",
+          }}
+        >
+          → Tech-fiche kanalenlijst
+        </a>
+      </div>
 
       {error && (
         <div
