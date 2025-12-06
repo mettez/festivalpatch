@@ -72,6 +72,9 @@ export default function TechListPage() {
   const [bandNotes, setBandNotes] = useState("");
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(() => new Set());
   const [channelDetails, setChannelDetails] = useState<Record<string, ChannelDetails>>({});
+  const [newChannelNames, setNewChannelNames] = useState<Record<string, string>>({});
+  const [newChannelOrders, setNewChannelOrders] = useState<Record<string, string>>({});
+  const [savingChannelCatId, setSavingChannelCatId] = useState<string | null>(null);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
   const knownCategoryIdsRef = useRef<Set<string>>(new Set());
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
@@ -159,6 +162,53 @@ export default function TechListPage() {
       else next.add(id);
       return next;
     });
+  };
+
+  const handleAddChannel = async (categoryId: string) => {
+    const name = (newChannelNames[categoryId] ?? "").trim();
+    if (name === "") {
+      setError("Geef een kanaalnaam in.");
+      return;
+    }
+
+    setSavingChannelCatId(categoryId);
+    setError(null);
+
+    const maxOrder =
+      channels.filter((c) => c.category_id === categoryId).reduce((acc, cur) => Math.max(acc, cur.default_order), 0) || 0;
+    const orderInput = newChannelOrders[categoryId];
+    const defaultOrder = orderInput && !Number.isNaN(Number(orderInput)) ? Number(orderInput) : maxOrder + 1;
+
+    const { data, error: insertError } = await supabase
+      .from("canonical_channels")
+      .insert({
+        name,
+        category_id: categoryId,
+        default_order: defaultOrder,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (insertError || !data) {
+      console.error("New channel error:", insertError);
+      setError("Fout bij toevoegen van kanaal.");
+      setSavingChannelCatId(null);
+      return;
+    }
+
+    setChannels((prev) => [
+      ...prev,
+      {
+        id: data.id,
+        name: data.name,
+        default_order: data.default_order,
+        category_id: data.category_id,
+      },
+    ]);
+    setNewChannelNames((prev) => ({ ...prev, [categoryId]: "" }));
+    setNewChannelOrders((prev) => ({ ...prev, [categoryId]: "" }));
+    setSavingChannelCatId(null);
   };
 
   const selectedChannelsSorted = useMemo(() => {
@@ -618,28 +668,91 @@ export default function TechListPage() {
                 </div>
 
                 {!collapsed && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
-                    {inCategory.map((ch) => {
-                      const checked = selectedChannelIds.has(ch.id);
-                      return (
-                        <label
-                          key={ch.id}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                            padding: "6px 8px",
-                            borderRadius: 4,
-                            border: checked ? "1px solid #fff" : "1px solid #555",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <input type="checkbox" checked={checked} onChange={() => toggleChannel(ch.id)} />
-                          <span>{ch.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                  <>
+                    {inCategory.length === 0 && <p style={{ color: "#aaa" }}>Nog geen kanalen in deze categorie.</p>}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
+                      {inCategory.map((ch) => {
+                        const checked = selectedChannelIds.has(ch.id);
+                        return (
+                          <label
+                            key={ch.id}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 6,
+                              padding: "6px 8px",
+                              borderRadius: 4,
+                              border: checked ? "1px solid #fff" : "1px solid #555",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <input type="checkbox" checked={checked} onChange={() => toggleChannel(ch.id)} />
+                            <span>{ch.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <input
+                        type="text"
+                        placeholder="Nieuw kanaal"
+                        value={newChannelNames[cat.id] ?? ""}
+                        onChange={(e) =>
+                          setNewChannelNames((prev) => ({
+                            ...prev,
+                            [cat.id]: e.target.value,
+                          }))
+                        }
+                        style={{
+                          flex: "1 1 220px",
+                          padding: "6px 8px",
+                          borderRadius: 4,
+                          border: "1px solid #444",
+                          background: "#0f0f0f",
+                          color: "#fff",
+                        }}
+                        disabled={savingChannelCatId === cat.id}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Volgorde (optioneel)"
+                        value={newChannelOrders[cat.id] ?? ""}
+                        onChange={(e) =>
+                          setNewChannelOrders((prev) => ({
+                            ...prev,
+                            [cat.id]: e.target.value,
+                          }))
+                        }
+                        style={{
+                          width: 160,
+                          padding: "6px 8px",
+                          borderRadius: 4,
+                          border: "1px solid #444",
+                          background: "#0f0f0f",
+                          color: "#fff",
+                        }}
+                        disabled={savingChannelCatId === cat.id}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddChannel(cat.id)}
+                        disabled={savingChannelCatId === cat.id || (newChannelNames[cat.id] ?? "").trim() === ""}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 4,
+                          border: "1px solid #fff",
+                          background: savingChannelCatId === cat.id ? "#444" : "#111",
+                          cursor:
+                            savingChannelCatId === cat.id || (newChannelNames[cat.id] ?? "").trim() === ""
+                              ? "not-allowed"
+                              : "pointer",
+                        }}
+                      >
+                        {savingChannelCatId === cat.id ? "Opslaan…" : "Kanaal toevoegen"}
+                      </button>
+                    </div>
+                  </>
                 )}
               </section>
             );
