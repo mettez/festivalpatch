@@ -57,6 +57,11 @@ export default function FestivalBuilderPage() {
   const [patchChannels, setPatchChannels] = useState<PatchChannel[]>([]);
   const [bands, setBands] = useState<Band[]>([]);
   const [usageMap, setUsageMap] = useState<Map<string, BandChannelUsage>>(new Map());
+  const [editingBandId, setEditingBandId] = useState<string | null>(null);
+  const [bandDirty, setBandDirty] = useState(false);
+  const [bandAutoStatus, setBandAutoStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const bandAutoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [draggingPatchId, setDraggingPatchId] = useState<string | null>(null);
 
   const [newBandName, setNewBandName] = useState("");
   const [newBandSelection, setNewBandSelection] = useState<Set<string>>(() => new Set());
@@ -75,6 +80,31 @@ export default function FestivalBuilderPage() {
   );
 
   const usageKey = (bandId: string, patchChannelId: string) => `${bandId}-${patchChannelId}`;
+
+  const loadBandIntoForm = (bandId: string | null) => {
+    if (!bandId) {
+      setEditingBandId(null);
+      setNewBandName("");
+      setNewBandSelection(new Set());
+      setBandDirty(false);
+      setBandAutoStatus("idle");
+      return;
+    }
+    const band = bands.find((b) => b.id === bandId);
+    if (!band) return;
+    setEditingBandId(bandId);
+    setNewBandName(band.name);
+    const usedPatchIds = usedByBand(bandId);
+    const canonicalIds = new Set<string>();
+    patchChannels.forEach((p) => {
+      if (usedPatchIds.has(p.id) && p.canonical_channel_id) {
+        canonicalIds.add(p.canonical_channel_id);
+      }
+    });
+    setNewBandSelection(canonicalIds);
+    setBandDirty(false);
+    setBandAutoStatus("idle");
+  };
 
   useEffect(() => {
     const loadBase = async () => {
@@ -128,6 +158,21 @@ export default function FestivalBuilderPage() {
     setCollapsedCategories(next);
     knownCategoryIdsRef.current = next;
   }, [categories]);
+
+  useEffect(() => {
+    if (!editingBandId) return;
+    if (!bandDirty) return;
+    if (savingBand) return;
+    if (newBandName.trim() === "") return;
+    if (bandAutoTimerRef.current) clearTimeout(bandAutoTimerRef.current);
+    setBandAutoStatus("saving");
+    bandAutoTimerRef.current = setTimeout(() => {
+      handleAddBand({ auto: true });
+    }, 800);
+    return () => {
+      if (bandAutoTimerRef.current) clearTimeout(bandAutoTimerRef.current);
+    };
+  }, [editingBandId, bandDirty, savingBand, newBandName]);
 
   const loadEventData = async (eventId: string) => {
     setLoading(true);
@@ -249,6 +294,7 @@ export default function FestivalBuilderPage() {
       else next.add(canonicalId);
       return next;
     });
+    if (editingBandId) setBandDirty(true);
   };
 
   const ensurePatchChannels = async (canonicalIds: string[]) => {
@@ -302,43 +348,79 @@ export default function FestivalBuilderPage() {
     return canonicalToPatch;
   };
 
-  const handleAddBand = async () => {
+  const handleAddBand = async (opts?: { auto?: boolean }) => {
+    const isAuto = opts?.auto === true;
     if (!selectedEvent) return;
     if (newBandName.trim() === "") {
-      setError("Geef een groepsnaam in.");
+      if (!isAuto) setError("Geef een groepsnaam in.");
       return;
     }
 
-    setSavingBand(true);
-    setError(null);
+    if (isAuto) {
+      setBandAutoStatus("saving");
+    } else {
+      setSavingBand(true);
+      setError(null);
+    }
 
     const canonicalIds = Array.from(newBandSelection);
     const canonicalToPatch = await ensurePatchChannels(canonicalIds);
 
-    const { data: bandRow, error: bandInsertError } = await supabase
-      .from("bands")
-      .insert({
-        event_id: selectedEvent.id,
-        name: newBandName.trim(),
-        sort_order: bands.length + 1,
-      })
-      .select()
-      .single();
+    let targetBandId = editingBandId;
+    let newBand: Band | null = null;
 
-    if (bandInsertError || !bandRow) {
-      console.error("Band insert error:", bandInsertError);
-      setError("Fout bij opslaan van de groep.");
-      setSavingBand(false);
-      return;
+    if (!targetBandId) {
+      const { data: bandRow, error: bandInsertError } = await supabase
+        .from("bands")
+        .insert({
+          event_id: selectedEvent.id,
+          name: newBandName.trim(),
+          sort_order: bands.length + 1,
+        })
+        .select()
+        .single();
+
+      if (bandInsertError || !bandRow) {
+        console.error("Band insert error:", bandInsertError);
+        setError("Fout bij opslaan van de groep.");
+        if (isAuto) setBandAutoStatus("error");
+        else setSavingBand(false);
+        return;
+      }
+
+      newBand = {
+        id: bandRow.id,
+        name: bandRow.name,
+        sort_order: bandRow.sort_order,
+      };
+      targetBandId = bandRow.id;
+    } else {
+      const { error: bandUpdateError } = await supabase
+        .from("bands")
+        .update({ name: newBandName.trim() })
+        .eq("id", targetBandId);
+      if (bandUpdateError) {
+        console.error("Band update error:", bandUpdateError);
+        setError("Fout bij opslaan van de groep.");
+        if (isAuto) setBandAutoStatus("error");
+        else setSavingBand(false);
+        return;
+      }
     }
 
-    const newBand: Band = {
-      id: bandRow.id,
-      name: bandRow.name,
-      sort_order: bandRow.sort_order,
-    };
-
     let insertedUsage: BandChannelUsage[] = [];
+
+    // Als we een bestaande band bewerken: verwijder eerst bestaande usage zodat we fris kunnen inserten
+    if (editingBandId) {
+      const { error: delUsageError } = await supabase.from("band_channel_usage").delete().eq("band_id", editingBandId);
+      if (delUsageError) {
+        console.error("Usage delete error:", delUsageError);
+        setError("Fout bij opslaan van de groep-kanalen.");
+        if (isAuto) setBandAutoStatus("error");
+        else setSavingBand(false);
+        return;
+      }
+    }
     if (canonicalIds.length > 0) {
       const canonicalMap = new Map<string, CanonicalChannel>();
       canonicalChannels.forEach((c) => canonicalMap.set(c.id, c));
@@ -348,7 +430,7 @@ export default function FestivalBuilderPage() {
           const patch = canonicalToPatch.get(cid);
           if (!patch) return null;
           return {
-            band_id: newBand.id,
+            band_id: targetBandId!,
             patch_channel_id: patch.id,
             is_used: true,
             label: canonicalMap.get(cid)?.name ?? null,
@@ -367,12 +449,13 @@ export default function FestivalBuilderPage() {
           .insert(usageRows)
           .select();
 
-        if (usageInsertError) {
-          console.error("Usage insert error:", usageInsertError);
-          setError("Fout bij opslaan van de groep-kanalen.");
-          setSavingBand(false);
-          return;
-        }
+      if (usageInsertError) {
+        console.error("Usage insert error:", usageInsertError);
+        setError("Fout bij opslaan van de groep-kanalen.");
+        if (isAuto) setBandAutoStatus("error");
+        else setSavingBand(false);
+        return;
+      }
 
         insertedUsage = (usageInsertData ?? []).map((row) => ({
           id: row.id,
@@ -384,20 +467,46 @@ export default function FestivalBuilderPage() {
       }
     }
 
-    setBands((prev) => [...prev, newBand]);
-    setUsageMap((prev) => {
-      const next = new Map(prev);
-      insertedUsage.forEach((row) => {
-        next.set(usageKey(row.band_id, row.patch_channel_id), row);
+    if (!editingBandId && newBand) {
+      setBands((prev) => [...prev, newBand!]);
+      setEditingBandId(newBand.id);
+    } else if (editingBandId) {
+      setBands((prev) =>
+        prev.map((b) => (b.id === editingBandId ? { ...b, name: newBandName.trim() } : b))
+      );
+      setUsageMap((prev) => {
+        const next = new Map(prev);
+        patchChannels.forEach((p) => next.delete(usageKey(editingBandId!, p.id)));
+        insertedUsage.forEach((row) => next.set(usageKey(row.band_id, row.patch_channel_id), row));
+        return next;
       });
-      return next;
-    });
+    }
 
     // refresh data so patch_channels and usage stay in sync (en baseline = laatste band)
     await loadEventData(selectedEvent.id);
+    await pruneUnusedPatchChannels(selectedEvent.id);
+    await loadEventData(selectedEvent.id);
 
-    setNewBandName("");
     setSavingBand(false);
+    setBandDirty(false);
+    setBandAutoStatus(isAuto ? "saved" : "idle");
+
+    const currentBandId = editingBandId || newBand?.id || targetBandId;
+
+    if (isAuto && currentBandId) {
+      // blijf op dezelfde band na autosave
+      setEditingBandId(currentBandId);
+      loadBandIntoForm(currentBandId);
+    } else if (!isAuto && newBand) {
+      setEditingBandId(newBand.id);
+      loadBandIntoForm(newBand.id);
+    } else if (!isAuto && editingBandId) {
+      loadBandIntoForm(editingBandId);
+    } else {
+      setEditingBandId(null);
+      setNewBandName("");
+      setNewBandSelection(new Set());
+    }
   };
 
   const handleAddChannel = async (categoryId: string) => {
@@ -496,6 +605,47 @@ export default function FestivalBuilderPage() {
     );
   };
 
+  const pruneUnusedPatchChannels = async (eventId: string) => {
+    const { data: patchData, error: patchError } = await supabase
+      .from("patch_channels")
+      .select("id, channel_number")
+      .eq("event_id", eventId)
+      .order("channel_number", { ascending: true });
+    if (patchError) {
+      console.error("Prune patch error:", patchError);
+      return;
+    }
+    if (!patchData || patchData.length === 0) return;
+
+    const patchIds = patchData.map((p) => p.id);
+    const { data: usageData, error: usageError } = await supabase
+      .from("band_channel_usage")
+      .select("patch_channel_id, is_used")
+      .in("patch_channel_id", patchIds);
+    if (usageError) {
+      console.error("Prune usage error:", usageError);
+      return;
+    }
+
+    const used = new Set<string>();
+    (usageData ?? []).forEach((row) => {
+      if (row.is_used) used.add(row.patch_channel_id);
+    });
+    const unusedIds = patchData.filter((p) => !used.has(p.id)).map((p) => p.id);
+    if (unusedIds.length === 0) return;
+
+    const { error: delError } = await supabase.from("patch_channels").delete().in("id", unusedIds);
+    if (delError) {
+      console.error("Delete unused patch_channels error:", delError);
+      return;
+    }
+
+    const remainingIds = patchData.filter((p) => !unusedIds.includes(p.id)).map((p) => p.id);
+    if (remainingIds.length > 0) {
+      await applyChannelOrder(remainingIds);
+    }
+  };
+
   const movePatchChannel = async (patchId: string, direction: -1 | 1) => {
     const rows = patchChannelRows;
     const idx = rows.findIndex((p) => p.id === patchId);
@@ -504,6 +654,28 @@ export default function FestivalBuilderPage() {
 
     const newOrder = [...rows];
     const [item] = newOrder.splice(idx, 1);
+    newOrder.splice(targetIdx, 0, item);
+
+    const orderedIds = newOrder.map((p) => p.id);
+    setPatchChannels(
+      newOrder.map((p, i) => ({
+        ...p,
+        channel_number: i + 1,
+      }))
+    );
+
+    await applyChannelOrder(orderedIds);
+  };
+
+  const reorderPatchChannel = async (dragId: string, targetId: string) => {
+    if (dragId === targetId) return;
+    const rows = patchChannelRows;
+    const dragIdx = rows.findIndex((p) => p.id === dragId);
+    const targetIdx = rows.findIndex((p) => p.id === targetId);
+    if (dragIdx === -1 || targetIdx === -1) return;
+
+    const newOrder = [...rows];
+    const [item] = newOrder.splice(dragIdx, 1);
     newOrder.splice(targetIdx, 0, item);
 
     const orderedIds = newOrder.map((p) => p.id);
@@ -554,31 +726,7 @@ export default function FestivalBuilderPage() {
           }
         }
       `}</style>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-        <label htmlFor="event-select" style={{ fontWeight: 600 }}>
-          Event:
-        </label>
-        <select
-          id="event-select"
-          value={selectedEventId ?? ""}
-          onChange={async (e) => {
-            const nextId = e.target.value;
-            setSelectedEventId(nextId);
-            router.replace(`/festival/builder?eventId=${nextId}`);
-            await loadEventData(nextId);
-          }}
-          style={{ padding: "6px 8px", borderRadius: 4 }}
-        >
-          {events.map((ev) => (
-            <option key={ev.id} value={ev.id}>
-              {ev.name}
-            </option>
-          ))}
-        </select>
-        {selectedEvent && <span style={{ color: "#aaa" }}>Datum: {selectedEvent.event_date ?? "n/a"}</span>}
-      </div>
-
-      <div style={{ margin: "0 0 16px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
         <a
           href="/"
           style={{
@@ -586,18 +734,35 @@ export default function FestivalBuilderPage() {
             borderRadius: 4,
             border: "1px solid #fff",
             textDecoration: "none",
+            width: "fit-content",
           }}
         >
           ← Terug naar start
         </a>
-      </div>
-
-      {selectedEvent && (
-        <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <h1 style={{ marginBottom: 4 }}>Matrix builder – {selectedEvent.name}</h1>
-          <div style={{ color: "#ccc" }}>Vul per groep de kanalen in; eerdere keuzes blijven aangevinkt.</div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label htmlFor="event-select" style={{ fontWeight: 600 }}>
+            Event:
+          </label>
+          <select
+            id="event-select"
+            value={selectedEventId ?? ""}
+            onChange={async (e) => {
+              const nextId = e.target.value;
+              setSelectedEventId(nextId);
+              router.replace(`/festival/builder?eventId=${nextId}`);
+              await loadEventData(nextId);
+            }}
+            style={{ padding: "6px 8px", borderRadius: 4 }}
+          >
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.name}
+              </option>
+            ))}
+          </select>
+          {selectedEvent && <span style={{ color: "#aaa" }}>Datum: {selectedEvent.event_date ?? "n/a"}</span>}
         </div>
-      )}
+      </div>
 
       {error && (
         <div
@@ -615,16 +780,29 @@ export default function FestivalBuilderPage() {
       )}
 
       <section style={{ marginBottom: 32 }}>
-        <h2>Nieuwe groep toevoegen</h2>
-        <p style={{ color: "#aaa", marginBottom: 8 }}>
-          Gebruik de kanalenlijst die je binnenkreeg. Vorige keuzes blijven aangevinkt; pas alleen de verschillen aan.
-        </p>
-        <div style={{ display: "flex", gap: 12, marginTop: 8, marginBottom: 12, alignItems: "center" }}>
+        <h2>Nieuwe groep</h2>
+        <div style={{ display: "flex", gap: 12, marginTop: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <select
+            value={editingBandId ?? ""}
+            onChange={(e) => loadBandIntoForm(e.target.value === "" ? null : e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 4, border: "1px solid #444" }}
+            disabled={savingBand}
+          >
+            <option value="">Nieuwe groep…</option>
+            {sortedBands.map((band) => (
+              <option key={band.id} value={band.id}>
+                {band.name}
+              </option>
+            ))}
+          </select>
           <input
             type="text"
             value={newBandName}
             placeholder="Groepsnaam"
-            onChange={(e) => setNewBandName(e.target.value)}
+            onChange={(e) => {
+              setNewBandName(e.target.value);
+              if (editingBandId) setBandDirty(true);
+            }}
             style={{
               flex: "0 0 260px",
               padding: "8px 10px",
@@ -646,8 +824,13 @@ export default function FestivalBuilderPage() {
               cursor: savingBand || newBandName.trim() === "" ? "not-allowed" : "pointer",
             }}
           >
-            {savingBand ? "Opslaan…" : "Opslaan / volgende groep"}
+            {savingBand ? "Opslaan…" : editingBandId ? "Groep opslaan" : "Opslaan / volgende groep"}
           </button>
+          <span style={{ minWidth: 120, color: "#bbb" }}>
+            {bandAutoStatus === "saving" && editingBandId ? "Opslaan…" : ""}
+            {bandAutoStatus === "saved" && editingBandId ? "Opgeslagen" : ""}
+            {bandAutoStatus === "error" && editingBandId ? "Opslaan mislukt" : ""}
+          </span>
         </div>
 
         {orderedCanonicalChannels.length === 0 ? (
@@ -864,7 +1047,21 @@ export default function FestivalBuilderPage() {
                 {patchChannelRows.map((patchChannel, index) => {
                   const inPatch = channelsUsedByAllBands.has(patchChannel.id);
                   return (
-                    <tr key={patchChannel.id} style={{ background: index % 2 === 0 ? "#0f0f0f" : "#141414" }}>
+                    <tr
+                      key={patchChannel.id}
+                      style={{
+                        background: index % 2 === 0 ? "#0f0f0f" : "#141414",
+                        outline: draggingPatchId === patchChannel.id ? "1px solid #666" : "none",
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const dragId = draggingPatchId || e.dataTransfer.getData("text/plain");
+                        if (!dragId) return;
+                        reorderPatchChannel(dragId, patchChannel.id);
+                        setDraggingPatchId(null);
+                      }}
+                    >
                       <td
                         style={{
                           padding: "8px 8px",
@@ -874,46 +1071,32 @@ export default function FestivalBuilderPage() {
                           fontWeight: 700,
                           display: "flex",
                           alignItems: "center",
-                          gap: 6,
+                          gap: 10,
                         }}
                       >
-                        <span style={{ minWidth: 24, textAlign: "right" }}>{patchChannel.channel_number}</span>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <button
-                            type="button"
-                            onClick={() => movePatchChannel(patchChannel.id, -1)}
-                            className="no-print"
-                            style={{
-                              padding: "2px 6px",
-                              borderRadius: 4,
-                              border: "1px solid #555",
-                              background: "#0f0f0f",
-                              color: "#fff",
-                              cursor: index === 0 ? "not-allowed" : "pointer",
-                              opacity: index === 0 ? 0.4 : 1,
-                            }}
-                            disabled={index === 0}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => movePatchChannel(patchChannel.id, 1)}
-                            className="no-print"
-                            style={{
-                              padding: "2px 6px",
-                              borderRadius: 4,
-                              border: "1px solid #555",
-                              background: "#0f0f0f",
-                              color: "#fff",
-                              cursor: index === patchChannelRows.length - 1 ? "not-allowed" : "pointer",
-                              opacity: index === patchChannelRows.length - 1 ? 0.4 : 1,
-                            }}
-                            disabled={index === patchChannelRows.length - 1}
-                          >
-                            ↓
-                          </button>
+                        <div
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", patchChannel.id);
+                            setDraggingPatchId(patchChannel.id);
+                          }}
+                          onDragEnd={() => setDraggingPatchId(null)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            border: "1px solid #444",
+                            cursor: "grab",
+                            background: "#0f0f0f",
+                          }}
+                          title="Versleep om te herordenen"
+                        >
+                          <span style={{ letterSpacing: 1, color: "#888" }}>⋮⋮</span>
                         </div>
+                        <span style={{ minWidth: 24, textAlign: "right" }}>{patchChannel.channel_number}</span>
                       </td>
                       <td
                         style={{

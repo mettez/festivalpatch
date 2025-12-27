@@ -449,18 +449,38 @@ export default function AdminChannelsPage() {
               <span style={{ fontSize: 12, color: "#888" }}>id: {cat.id.slice(0, 8)}…</span>
               <button
                 type="button"
+                aria-label="Categorie verwijderen"
                 onClick={() => handleDeleteCategory(cat.id)}
                 disabled={deletingId === cat.id}
                 style={{
-                  padding: "6px 10px",
-                  borderRadius: 4,
+                  padding: "6px 8px",
+                  borderRadius: 6,
                   border: "1px solid #d9534f",
                   background: "#2a0f0f",
                   color: "#f5c6cb",
                   cursor: deletingId === cat.id ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
-                {deletingId === cat.id ? "Verwijderen…" : "Categorie verwijderen"}
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6h18" />
+                  <path d="M8 6v13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6" />
+                  <path d="M10 10v7" />
+                  <path d="M14 10v7" />
+                  <path d="M9 6 9.6 4.2A1 1 0 0 1 10.56 3.5h2.88a1 1 0 0 1 .96.7L15 6" />
+                </svg>
               </button>
             </div>
 
@@ -527,18 +547,38 @@ export default function AdminChannelsPage() {
                     </label>
                     <button
                       type="button"
+                      aria-label="Kanaal verwijderen"
                       onClick={() => handleDeleteChannel(ch.id)}
                       disabled={deletingId === ch.id}
                       style={{
-                        padding: "6px 10px",
-                        borderRadius: 4,
+                        padding: "6px 8px",
+                        borderRadius: 6,
                         border: "1px solid #d9534f",
                         background: "#2a0f0f",
                         color: "#f5c6cb",
                         cursor: deletingId === ch.id ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                       }}
                     >
-                      {deletingId === ch.id ? "Verwijderen…" : "Kanaal verwijderen"}
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 6h18" />
+                        <path d="M8 6v13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6" />
+                        <path d="M10 10v7" />
+                        <path d="M14 10v7" />
+                        <path d="M9 6 9.6 4.2A1 1 0 0 1 10.56 3.5h2.88a1 1 0 0 1 .96.7L15 6" />
+                      </svg>
                     </button>
                     <span style={{ fontSize: 12, color: "#888" }}>id: {ch.id.slice(0, 8)}…</span>
                   </div>

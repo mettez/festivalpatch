@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Category = {
@@ -71,6 +72,8 @@ export default function TechListPage() {
   const [bandName, setBandName] = useState("");
   const [bandNotes, setBandNotes] = useState("");
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(() => new Set());
+  const [channelOrder, setChannelOrder] = useState<string[]>([]);
+  const [draggingChannelId, setDraggingChannelId] = useState<string | null>(null);
   const [channelDetails, setChannelDetails] = useState<Record<string, ChannelDetails>>({});
   const [newChannelNames, setNewChannelNames] = useState<Record<string, string>>({});
   const [newChannelOrders, setNewChannelOrders] = useState<Record<string, string>>({});
@@ -78,6 +81,10 @@ export default function TechListPage() {
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => new Set());
   const knownCategoryIdsRef = useRef<Set<string>>(new Set());
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const [isDirty, setIsDirty] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handlePrint = () => {
     if (typeof window !== "undefined") window.print();
   };
@@ -158,10 +165,19 @@ export default function TechListPage() {
   const toggleChannel = (id: string) => {
     setSelectedChannelIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
+    setChannelOrder((prev) => {
+      const exists = prev.includes(id);
+      if (exists) return prev.filter((item) => item !== id);
+      return [...prev, id];
+    });
+    setIsDirty(true);
   };
 
   const handleAddChannel = async (categoryId: string) => {
@@ -211,9 +227,27 @@ export default function TechListPage() {
     setSavingChannelCatId(null);
   };
 
+  const canonicalIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    orderedChannels.forEach((ch, idx) => map.set(ch.id, idx));
+    return map;
+  }, [orderedChannels]);
+
   const selectedChannelsSorted = useMemo(() => {
-    return orderedChannels.filter((ch) => selectedChannelIds.has(ch.id));
-  }, [orderedChannels, selectedChannelIds]);
+    const orderIndex = new Map<string, number>();
+    channelOrder.forEach((id, idx) => orderIndex.set(id, idx));
+    const selected = orderedChannels.filter((ch) => selectedChannelIds.has(ch.id));
+    return [...selected].sort((a, b) => {
+      const oa = orderIndex.get(a.id);
+      const ob = orderIndex.get(b.id);
+      if (oa !== undefined && ob !== undefined) return oa - ob;
+      if (oa !== undefined) return -1;
+      if (ob !== undefined) return 1;
+      const ca = canonicalIndexMap.get(a.id) ?? 9999;
+      const cb = canonicalIndexMap.get(b.id) ?? 9999;
+      return ca - cb;
+    });
+  }, [orderedChannels, selectedChannelIds, channelOrder, canonicalIndexMap]);
 
   const copyToClipboard = async () => {
     const lines = selectedChannelsSorted.map((ch, idx) => {
@@ -261,18 +295,72 @@ export default function TechListPage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleSaveTechlist = async () => {
+  const moveSelectedChannel = (channelId: string, direction: -1 | 1) => {
+    const currentOrder = selectedChannelsSorted.map((ch) => ch.id);
+    const idx = currentOrder.findIndex((id) => id === channelId);
+    const targetIdx = idx + direction;
+    if (idx === -1 || targetIdx < 0 || targetIdx >= currentOrder.length) return;
+    const next = [...currentOrder];
+    const [item] = next.splice(idx, 1);
+    next.splice(targetIdx, 0, item);
+    setChannelOrder(next);
+    setIsDirty(true);
+  };
+
+  const reorderChannels = (dragId: string | null, targetId: string) => {
+    if (!dragId || dragId === targetId) return;
+    const currentOrder = selectedChannelsSorted.map((ch) => ch.id);
+    const dragIdx = currentOrder.indexOf(dragId);
+    const targetIdx = currentOrder.indexOf(targetId);
+    if (dragIdx === -1 || targetIdx === -1) return;
+    const next = [...currentOrder];
+    const [item] = next.splice(dragIdx, 1);
+    next.splice(targetIdx, 0, item);
+    setChannelOrder(next);
+    setIsDirty(true);
+  };
+
+  useEffect(() => {
+    const fromQuery = searchParams.get("techlistId");
+    if (!fromQuery) return;
+    if (selectedTechlistId === fromQuery) return;
+    const exists = techlists.some((t) => t.id === fromQuery);
+    if (!exists) return;
+    loadTechlist(fromQuery);
+  }, [searchParams, techlists, selectedTechlistId]);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    if (loadingTechlist || deleting) return;
+    if (bandName.trim() === "") return;
+    if (selectedChannelsSorted.length === 0) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    setAutoSaveStatus("saving");
+    autoSaveTimerRef.current = setTimeout(() => {
+      handleSaveTechlist({ auto: true });
+    }, 800);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [isDirty, loadingTechlist, deleting, bandName, selectedChannelsSorted]);
+
+  const handleSaveTechlist = async (opts?: { auto?: boolean }) => {
+    const isAuto = opts?.auto === true;
     if (bandName.trim() === "") {
-      setError("Geef een groepsnaam in.");
+      if (!isAuto) setError("Geef een groepsnaam in.");
       return;
     }
     if (selectedChannelsSorted.length === 0) {
-      setError("Selecteer minstens één kanaal.");
+      if (!isAuto) setError("Selecteer minstens één kanaal.");
       return;
     }
 
-    setSaving(true);
-    setError(null);
+    if (isAuto) {
+      setAutoSaveStatus("saving");
+    } else {
+      setSaving(true);
+      setError(null);
+    }
 
     let techlistId = selectedTechlistId;
 
@@ -289,11 +377,13 @@ export default function TechListPage() {
       if (insertError || !data) {
         console.error("Insert techlist error:", insertError);
         setError("Fout bij opslaan van techlist.");
-        setSaving(false);
+        if (isAuto) setAutoSaveStatus("error");
+        else setSaving(false);
         return;
       }
       techlistId = data.id;
       setSelectedTechlistId(techlistId);
+      setChannelOrder(selectedChannelsSorted.map((ch) => ch.id));
       setTechlists((prev) => [{ id: data.id, name: data.name, notes: data.notes, created_at: data.created_at }, ...prev]);
     } else {
       const { error: updateError } = await supabase
@@ -306,7 +396,8 @@ export default function TechListPage() {
       if (updateError) {
         console.error("Update techlist error:", updateError);
         setError("Fout bij opslaan van techlist.");
-        setSaving(false);
+        if (isAuto) setAutoSaveStatus("error");
+        else setSaving(false);
         return;
       }
     }
@@ -315,7 +406,8 @@ export default function TechListPage() {
     if (delError) {
       console.error("Delete techlist_channels error:", delError);
       setError("Fout bij opslaan van techlist-kanalen.");
-      setSaving(false);
+      if (isAuto) setAutoSaveStatus("error");
+      else setSaving(false);
       return;
     }
 
@@ -341,13 +433,20 @@ export default function TechListPage() {
     if (insertChannelsError) {
       console.error("Insert techlist_channels error:", insertChannelsError);
       setError("Fout bij opslaan van techlist-kanalen.");
-      setSaving(false);
+      if (isAuto) setAutoSaveStatus("error");
+      else setSaving(false);
       return;
     }
 
-    setSaving(false);
-    setCopyMessage("Techlist opgeslagen.");
-    setTimeout(() => setCopyMessage(null), 2000);
+    if (isAuto) {
+      setAutoSaveStatus("saved");
+    } else {
+      setSaving(false);
+      setAutoSaveStatus("saved");
+      setCopyMessage("Techlist opgeslagen.");
+      setTimeout(() => setCopyMessage(null), 2000);
+    }
+    setIsDirty(false);
   };
 
   const loadTechlist = async (id: string) => {
@@ -373,8 +472,10 @@ export default function TechListPage() {
     }
 
     if (chData) {
-      const ids = chData.map((row) => row.canonical_channel_id);
+      const sortedByChannelNumber = [...chData].sort((a, b) => a.channel_number - b.channel_number);
+      const ids = sortedByChannelNumber.map((row) => row.canonical_channel_id);
       setSelectedChannelIds(new Set(ids));
+      setChannelOrder(ids);
       const details: Record<string, ChannelDetails> = {};
       chData.forEach((row) => {
         details[row.canonical_channel_id] = {
@@ -388,6 +489,8 @@ export default function TechListPage() {
     }
 
     setLoadingTechlist(false);
+    setIsDirty(false);
+    setAutoSaveStatus("idle");
   };
 
   const handleDeleteTechlist = async () => {
@@ -420,6 +523,7 @@ export default function TechListPage() {
     setBandName("");
     setBandNotes("");
     setSelectedChannelIds(new Set());
+    setChannelOrder([]);
     setChannelDetails({});
     setDeleting(false);
   };
@@ -465,27 +569,37 @@ export default function TechListPage() {
         </a>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <h1>Kanalenlijst voor technische fiche</h1>
-          <p style={{ marginBottom: 8 }}>
-            Kies een groep en vink de kanalen aan. Export via CSV of PDF (print).
-          </p>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+        <h1 style={{ margin: 0 }}>Kanalenlijst</h1>
+        <div style={{ display: "flex", gap: 10 }} className="no-print">
+          <button
+            type="button"
+            onClick={handlePrint}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 4,
+              border: "1px solid #fff",
+              background: "#111",
+              cursor: "pointer",
+            }}
+          >
+            Download PDF
+          </button>
+          <button
+            type="button"
+            onClick={downloadCsv}
+            disabled={selectedChannelsSorted.length === 0}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 4,
+              border: "1px solid #fff",
+              background: selectedChannelsSorted.length === 0 ? "#444" : "#111",
+              cursor: selectedChannelsSorted.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            Download CSV
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={handlePrint}
-          className="no-print"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 4,
-            border: "1px solid #fff",
-            background: "#111",
-            cursor: "pointer",
-          }}
-        >
-          Exporteer PDF
-        </button>
       </div>
 
       {error && (
@@ -504,15 +618,48 @@ export default function TechListPage() {
       )}
 
       <section style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          <select
+            value={selectedTechlistId ?? ""}
+            onChange={(e) => {
+              const nextId = e.target.value;
+              if (nextId === "") {
+                setSelectedTechlistId(null);
+                setBandName("");
+                setBandNotes("");
+                setSelectedChannelIds(new Set());
+                setChannelOrder([]);
+                setChannelDetails({});
+              } else {
+                loadTechlist(nextId);
+              }
+            }}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 4,
+              border: "1px solid #444",
+              background: "#0f0f0f",
+              color: "#fff",
+            }}
+            disabled={loadingTechlist}
+          >
+            <option value="">Nieuwe techlist…</option>
+            {techlists.map((tl) => (
+              <option key={tl.id} value={tl.id}>
+                {tl.name}
+              </option>
+            ))}
+          </select>
           <input
             type="text"
-            placeholder="Groepsnaam"
+            placeholder="Naam kanalenlijst"
             value={bandName}
-            onChange={(e) => setBandName(e.target.value)}
+            onChange={(e) => {
+              setBandName(e.target.value);
+              setIsDirty(true);
+            }}
             style={{
-              flex: "1 1 280px",
-              padding: "8px 10px",
+              padding: "10px 12px",
               borderRadius: 4,
               border: "1px solid #444",
               background: "#0f0f0f",
@@ -523,46 +670,23 @@ export default function TechListPage() {
           <textarea
             placeholder="Notes (optioneel)"
             value={bandNotes}
-            onChange={(e) => setBandNotes(e.target.value)}
+            onChange={(e) => {
+              setBandNotes(e.target.value);
+              setIsDirty(true);
+            }}
             style={{
-              flex: "1 1 280px",
-              padding: "8px 10px",
+              padding: "10px 12px",
               borderRadius: 4,
               border: "1px solid #444",
               background: "#0f0f0f",
               color: "#fff",
-              minHeight: 60,
+              minHeight: 70,
             }}
             disabled={saving || deleting || loadingTechlist}
           />
         </div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <select
-            value={selectedTechlistId ?? ""}
-            onChange={(e) => {
-              const nextId = e.target.value;
-              if (nextId === "") {
-                setSelectedTechlistId(null);
-                setBandName("");
-                setBandNotes("");
-                setSelectedChannelIds(new Set());
-                setChannelDetails({});
-              } else {
-                loadTechlist(nextId);
-              }
-            }}
-            style={{ padding: "8px 10px", borderRadius: 4, border: "1px solid #444" }}
-            disabled={loadingTechlist}
-          >
-            <option value="">Nieuwe techlist…</option>
-            {techlists.map((tl) => (
-              <option key={tl.id} value={tl.id}>
-                {tl.name}
-              </option>
-            ))}
-          </select>
-
           <button
             type="button"
             onClick={handleSaveTechlist}
@@ -580,50 +704,46 @@ export default function TechListPage() {
           </button>
           <button
             type="button"
+            aria-label="Techlist verwijderen"
             onClick={handleDeleteTechlist}
             disabled={deleting || !selectedTechlistId}
             style={{
-              padding: "8px 12px",
-              borderRadius: 4,
+              padding: "8px 10px",
+              borderRadius: 6,
               border: "1px solid #d9534f",
               background: deleting || !selectedTechlistId ? "#2a0f0f" : "#2a0f0f",
               color: "#f5c6cb",
               cursor: deleting || !selectedTechlistId ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
             }}
             className="no-print"
           >
-            {deleting ? "Verwijderen…" : "Techlist verwijderen"}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 6h18" />
+              <path d="M8 6v13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6" />
+              <path d="M10 10v7" />
+              <path d="M14 10v7" />
+              <path d="M9 6 9.6 4.2A1 1 0 0 1 10.56 3.5h2.88a1 1 0 0 1 .96.7L15 6" />
+            </svg>
           </button>
-          <button
-            type="button"
-            onClick={copyToClipboard}
-            disabled={selectedChannelsSorted.length === 0}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 4,
-              border: "1px solid #fff",
-              background: selectedChannelsSorted.length === 0 ? "#444" : "#111",
-              cursor: selectedChannelsSorted.length === 0 ? "not-allowed" : "pointer",
-            }}
-            className="no-print"
-          >
-            Kopieer CSV
-          </button>
-          <button
-            type="button"
-            onClick={downloadCsv}
-            disabled={selectedChannelsSorted.length === 0}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 4,
-              border: "1px solid #fff",
-              background: selectedChannelsSorted.length === 0 ? "#444" : "#111",
-              cursor: selectedChannelsSorted.length === 0 ? "not-allowed" : "pointer",
-            }}
-            className="no-print"
-          >
-            Download CSV
-          </button>
+          <span style={{ minWidth: 120, color: "#bbb" }}>
+            {autoSaveStatus === "saving" && "Opslaan…"}
+            {autoSaveStatus === "saved" && "Opgeslagen"}
+            {autoSaveStatus === "error" && "Opslaan mislukt"}
+          </span>
           {copyMessage && <span>{copyMessage}</span>}
         </div>
       </section>
@@ -770,7 +890,7 @@ export default function TechListPage() {
               marginTop: 8,
               borderCollapse: "collapse",
               width: "100%",
-              maxWidth: 600,
+              minWidth: 760,
             }}
           >
             <thead>
@@ -779,19 +899,50 @@ export default function TechListPage() {
                   style={{
                     textAlign: "left",
                     borderBottom: "1px solid #444",
-                    padding: "4px 8px",
+                    padding: "6px 10px",
+                    width: 140,
                   }}
                 >
-                  Ch
+                  Volgorde
                 </th>
                 <th
                   style={{
                     textAlign: "left",
                     borderBottom: "1px solid #444",
-                    padding: "4px 8px",
+                    padding: "6px 10px",
                   }}
                 >
                   Kanaal
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "1px solid #444",
+                    padding: "6px 10px",
+                    width: 180,
+                  }}
+                >
+                  Mic/DI
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "1px solid #444",
+                    padding: "6px 10px",
+                    width: 180,
+                  }}
+                >
+                  Stand
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "1px solid #444",
+                    padding: "6px 10px",
+                    width: 260,
+                  }}
+                >
+                  Notes
                 </th>
               </tr>
             </thead>
@@ -803,35 +954,76 @@ export default function TechListPage() {
                   stand: "",
                   notes: "",
                 };
+                const labelMinWidth = Math.min(520, Math.max((details.label || ch.name).length * 10, 240));
+                const micWidth = Math.min(360, Math.max((details.mic_or_di || "").length * 10, 160));
+                const notesWidth = Math.min(520, Math.max((details.notes || "").length * 8, 240));
                 return (
-                  <tr key={ch.id}>
+                  <tr
+                    key={ch.id}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      reorderChannels(draggingChannelId, ch.id);
+                      setDraggingChannelId(null);
+                    }}
+                    style={{ background: draggingChannelId === ch.id ? "#111" : undefined }}
+                  >
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "8px 10px",
                         borderBottom: "1px solid #333",
-                        width: 60,
+                        width: 140,
                       }}
                     >
-                      {index + 1}
+                      <div
+                        style={{ display: "flex", alignItems: "center", gap: 10 }}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = "move";
+                          setDraggingChannelId(ch.id);
+                        }}
+                        onDragEnd={() => setDraggingChannelId(null)}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            border: "1px solid #444",
+                            cursor: "grab",
+                            background: "#0f0f0f",
+                          }}
+                          title="Versleep om te herordenen"
+                        >
+                          <span style={{ letterSpacing: 1, color: "#888" }}>⋮⋮</span>
+                        </div>
+                        <span style={{ minWidth: 20, textAlign: "right" }}>{index + 1}</span>
+                      </div>
                     </td>
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "8px 10px",
                         borderBottom: "1px solid #333",
                       }}
                     >
                       <input
                         type="text"
                         value={details.label}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setChannelDetails((prev) => ({
                             ...prev,
                             [ch.id]: { ...details, label: e.target.value },
-                          }))
-                        }
+                          }));
+                          setIsDirty(true);
+                        }}
                         style={{
                           width: "100%",
-                          padding: "6px 8px",
+                          minWidth: labelMinWidth,
+                          padding: "8px 10px",
                           borderRadius: 4,
                           border: "1px solid #444",
                           background: "#0f0f0f",
@@ -841,24 +1033,26 @@ export default function TechListPage() {
                     </td>
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "8px 10px",
                         borderBottom: "1px solid #333",
-                        width: 140,
+                        width: 180,
                       }}
                     >
                       <input
                         type="text"
                         placeholder="Mic/DI"
                         value={details.mic_or_di}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setChannelDetails((prev) => ({
                             ...prev,
                             [ch.id]: { ...details, mic_or_di: e.target.value },
-                          }))
-                        }
+                          }));
+                          setIsDirty(true);
+                        }}
                         style={{
                           width: "100%",
-                          padding: "6px 8px",
+                          minWidth: micWidth,
+                          padding: "8px 10px",
                           borderRadius: 4,
                           border: "1px solid #444",
                           background: "#0f0f0f",
@@ -868,22 +1062,24 @@ export default function TechListPage() {
                     </td>
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "8px 10px",
                         borderBottom: "1px solid #333",
-                        width: 140,
+                        width: 180,
                       }}
                     >
                       <select
                         value={details.stand || "none"}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setChannelDetails((prev) => ({
                             ...prev,
                             [ch.id]: { ...details, stand: e.target.value },
-                          }))
-                        }
+                          }));
+                          setIsDirty(true);
+                        }}
                         style={{
                           width: "100%",
-                          padding: "6px 8px",
+                          minWidth: 180,
+                          padding: "8px 10px",
                           borderRadius: 4,
                           border: "1px solid #444",
                           background: "#0f0f0f",
@@ -898,24 +1094,26 @@ export default function TechListPage() {
                     </td>
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "8px 10px",
                         borderBottom: "1px solid #333",
-                        width: 200,
+                        width: 260,
                       }}
                     >
                       <input
                         type="text"
                         placeholder="Notes"
                         value={details.notes}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setChannelDetails((prev) => ({
                             ...prev,
                             [ch.id]: { ...details, notes: e.target.value },
-                          }))
-                        }
+                          }));
+                          setIsDirty(true);
+                        }}
                         style={{
                           width: "100%",
-                          padding: "6px 8px",
+                          minWidth: notesWidth,
+                          padding: "8px 10px",
                           borderRadius: 4,
                           border: "1px solid #444",
                           background: "#0f0f0f",
